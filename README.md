@@ -8,7 +8,7 @@ A python 3 script designed to work with the RaspberryPi, Enviro + Air Quality Ha
 * [PMS5003 Particulate Matter Sensor](https://shop.pimoroni.com/products/pms5003-particulate-matter-sensor-with-cable)
 
 ## Software
-I'm using [Python 3.7.3](https://www.python.org/downloads/release/python-373/).  After setting up the hardware I installed the [Python packages supplied by Pimoroni](https://github.com/pimoroni/enviroplus-python).  They supply a one-line installer which you should probably use but I didn't use.  I did the following:
+I'm using [Python 3.7.3](https://www.python.org/downloads/release/python-373/).  After setting up the hardware I installed the [Python packages supplied by Pimoroni](https://github.com/pimoroni/enviroplus-python).  They supply a one-line installer but I didn't use it.  I did the following:
 ```
 git clone https://github.com/pimoroni/enviroplus-python
 cd enviroplus-python
@@ -31,3 +31,7 @@ I used the following cron job to schedule the script to run when the Pi boots:
 ```
 @reboot Python3 /home/pi/EnviroPi/runEnviroPi.py
 ```
+
+## References
+* [An outdoor air quality station with Enviro+ and Luftdaten](https://learn.pimoroni.com/tutorial/sandyj/enviro-plus-luftdaten-air-quality-station):  A guide written by [Sandy Macdonald](https://sandyjmacdonald.github.io) (hosted on [Pimoroni](https://learn.pimoroni.com)) discussing how to set up and use the hardware.
+* [enviroplus-python](https://github.com/pimoroni/enviroplus-python):  The github repository contains many helpful examples.
