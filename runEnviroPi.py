@@ -1,8 +1,11 @@
+import sys
 import time
 from datetime import datetime, timedelta
 import math
 from PIL import Image, ImageDraw, ImageFont
 from fonts.ttf import RobotoMedium as UserFont
+# used to communicate with Adafruit IO.
+from Adafruit_IO import Client, Feed, Data, RequestError
 # used to draw on the LCD
 import ST7735
 # used for Memory and CPU load
@@ -16,11 +19,60 @@ from bme280 import BME280
 from enviroplus import gas
 # used for pollution
 from pms5003 import PMS5003, ReadTimeoutError as pmsReadTimeoutError
+# used for light and proximity
+from ltr559 import LTR559
+
+# Change this to false if you decide not to use AIO.
+USE_AIO = True
+# Initializing the Adafruit IO feeds
+aio = ""
+if USE_AIO:
+    try:
+        aioCredentials = open("AdafruitUserInfo", "r")
+        aioName = aioCredentials.readline().rstrip('\n')
+        aioKey  = aioCredentials.readline().rstrip('\n')
+        aioCredentials.close()
+        aio = Client(aioName, aioKey)
+    except FileNotFoundError:
+        USE_AIO = False
+# This function will be used repeatedly to get feed keys from the client or create a new one.
+def initializeFeed(client, feedKey):
+    returnKey = ""
+    if USE_AIO:
+        try:
+            feed = client.feeds(feedKey.lower())
+            returnKey = feed.key
+        except RequestError:
+            feed = Feed(name = feedKey.lower())
+            feed = client.create_feed(feed)
+            returnKey = feed.key
+    return returnKey
+# This function will be used to report data to AIO.
+def reportToAIO(feedKey, value):
+    if USE_AIO:
+        aio.append(feedKey, value)
+# Here is where we initialize the feeds that we use for reporting
+aioKey_gasRed = initializeFeed(aio, "EnviroPi-GasReducing")
+aioKey_gasOxi = initializeFeed(aio, "EnviroPi-GasOxidising")
+aioKey_gasNH3 = initializeFeed(aio, "EnviroPi-GasNH3")
+aioKey_polLar = initializeFeed(aio, "EnviroPi-PollutionLarge")
+aioKey_polMed = initializeFeed(aio, "EnviroPi-PollutionMedium")
+aioKey_polSml = initializeFeed(aio, "EnviroPi-PollutionSmall")
+aioKey_humidity = initializeFeed(aio, "EnviroPi-Humidity")
+aioKey_pressure = initializeFeed(aio, "EnviroPi-Pressure")
+aioKey_light = initializeFeed(aio, "EnviroPi-Light")
+aioKey_proximity = initializeFeed(aio, "EnviroPi-Proximity")
+# NOTE: There are some bad practices here.  Later in the script we'll call reportToAIO repeatedly so its
+#       arguments must exist even if we're not using AIO.  So if the user decides not to use AIO or if the
+#       credentials file is missing then the value of "aio" and the values of these keys are assigned to
+#       be an empty string.  However, that will only happen if USE_AIO == False and so those variables will
+#       never be used.  This is bad practice but for such a small script I didn't bother doing it right.
 
 # Initializing the sensors
 # The gas sensor doesn't need initialized like this.
 BME280 = BME280(i2c_dev = SMBus(1))
 PMS5003 = PMS5003()
+LTR559 = LTR559()
 
 # Initializing the LCD
 DISPLAY = ST7735.ST7735(port = 0, cs = 1, dc = 9, backlight = 12, rotation = 90, spi_speed_hz = 10000000)
@@ -30,13 +82,17 @@ WIDTH = DISPLAY.width
 HEIGHT = DISPLAY.height
 IMG = Image.new('RGB', (WIDTH, HEIGHT), color = (0, 0, 0))
 DRAW = ImageDraw.Draw(IMG)
+BOXWIDTH_STATUS = 10
+BOXWIDTH_AIO = 2
 
 # Color variables
-COLOR_BACKGROUND    = (0, 0, 0)
-COLOR_TEXT_SAFE     = (255, 255, 255)
-COLOR_TEXT_MILD     = (0, 255, 0)
-COLOR_TEXT_MODERATE = (255, 255, 0)
-COLOR_TEXT_UNSAFE   = (255, 0, 0)
+COLOR_BACKGROUND     = (0, 0, 0)
+COLOR_TEXT_SAFE      = (255, 255, 255)
+COLOR_TEXT_MILD      = (0, 255, 0)
+COLOR_TEXT_MODERATE  = (255, 255, 0)
+COLOR_TEXT_UNSAFE    = (255, 0, 0)
+COLOR_AIO_IN_USE     = (0, 0, 255)
+COLOR_AIO_FAIL       = (255, 255, 255)
 
 # A global variable which represents a missing value.
 MISSING_VALUE = -1
@@ -49,6 +105,9 @@ MAX_ARRAY_LENGTH = 1000
 
 # Warm up time before averaging starts.
 WARMUP_TIME = timedelta(minutes = 2)
+
+# Adafruit imposes a limit on the rate of uploads.  This variable sets the minimum time between uploads.
+MIN_TIME_BETWEEN_AIO_REPORTS = timedelta(minutes = 2)
 
 # A function to format the Air Quality strings.
 def formatAirQualityText(prefix, level, avg):
@@ -120,10 +179,16 @@ def drawText(strings, colors):
     fontSize = math.floor(HEIGHT / len(strings))
     font = ImageFont.truetype(UserFont, fontSize)
     for i in range(0, max(len(strings), len(colors))):
-        DRAW.text((0, math.floor(i * HEIGHT / len(strings))), strings[i], font = font, fill = colors[i])
+        DRAW.text((BOXWIDTH_AIO+2, math.floor(i * HEIGHT / len(strings))), strings[i], font = font, fill = colors[i])
+
+def drawAIOStatus(color):
+    DRAW.rectangle((0, 0, BOXWIDTH_AIO, HEIGHT), color)
 
 # This timestamp will be used to keep track of the uptime.
 timeStart = datetime.now()
+
+# This variable records the most recent AIO report to ensure that we don't write too often.
+lastAIOReport = datetime.now()
 
 # Initializing averaging arrays
 listGasRed = []
@@ -132,6 +197,9 @@ listGasNH3 = []
 listPolLar = []
 listPolMed = []
 listPolSml = []
+
+# Initializing variables used for the AIO warning box.
+colAIO = COLOR_BACKGROUND
 
 # The following infinite loop repeatedly polls the sensors for data and then writes the data to the LCD screen.
 # It can be interrupted by a keyboard interrupt.
@@ -232,8 +300,9 @@ try:
         # Drawing the screen
         DRAW.rectangle((0, 0, WIDTH, HEIGHT), COLOR_BACKGROUND)
         drawText(listOfStrings, listOfColors)
-        DRAW.rectangle((WIDTH-10, 0, WIDTH, HEIGHT/2), gasAlertColor)
-        DRAW.rectangle((WIDTH-10, HEIGHT/2, WIDTH, HEIGHT), polAlertColor)
+        DRAW.rectangle((WIDTH-BOXWIDTH_STATUS, 0, WIDTH, HEIGHT/2), gasAlertColor)
+        DRAW.rectangle((WIDTH-BOXWIDTH_STATUS, HEIGHT/2, WIDTH, HEIGHT), polAlertColor)
+        drawAIOStatus(colAIO)
         DISPLAY.display(IMG)
 
         # Display the Air Quality metrics for a while.
@@ -242,8 +311,6 @@ try:
         ##############################
         # Second Screen: Miscellaneous
         ##############################
-
-        # Getting some readings to display.
 
         # Humidity reading as a percentage.
         humidity = BME280.get_humidity()
@@ -275,6 +342,10 @@ try:
         strUptime = "Uptime: " + uptimeFormatted
         colUptime = COLOR_TEXT_SAFE
 
+        # These are some other things that I'm reporting to AIO but don't display on the LCD.
+        light = LTR559.get_lux()
+        proximity = LTR559.get_lux()
+
         # List of strings and colors to be used for printing.
         listOfStrings = [strHumidity, strPressure, strCPUTemp, strCPULoad, strMemLoad, strUptime]
         listOfColors  = [colHumidity, colPressure, colCPUTemp, colCPULoad, colMemLoad, colUptime]
@@ -282,10 +353,38 @@ try:
         # Drawing the screen
         DRAW.rectangle((0, 0, WIDTH, HEIGHT), COLOR_BACKGROUND)
         drawText(listOfStrings, listOfColors)
+        drawAIOStatus(colAIO)
         DISPLAY.display(IMG)
 
         # Display the Miscellaneous values for a while.
         time.sleep(SCREEN_CHANGE_DELAY)
+
+        ##################
+        # Reporting to AIO
+        ##################
+
+        if USE_AIO and uptime > WARMUP_TIME and datetime.now() - lastAIOReport > MIN_TIME_BETWEEN_AIO_REPORTS:
+            try:
+                # Reporting harmful gasses.
+                reportToAIO(aioKey_gasRed, gasRed)
+                reportToAIO(aioKey_gasOxi, gasOxi)
+                reportToAIO(aioKey_gasNH3, gasNH3)
+                # Reporting pollution.
+                reportToAIO(aioKey_polLar, polLar)
+                reportToAIO(aioKey_polMed, polMed)
+                reportToAIO(aioKey_polSml, polSml)
+                # Reporting other sensors.
+                reportToAIO(aioKey_humidity, humidity)
+                reportToAIO(aioKey_pressure, pressure)
+                reportToAIO(aioKey_light, light)
+                # reportToAIO(aioKey_proximity, proximity)
+                # Resetting the timestamp on the last AIO report.
+                lastAIOReport = datetime.now()
+                # Change the color of the indicator to show that the AIO report succeeded.
+                colAIO = COLOR_AIO_IN_USE
+            except:
+                # This only happens if the AIO report fails for some reason.
+                colAIO = COLOR_AIO_FAIL
 
 except KeyboardInterrupt:
     DRAW.rectangle((0, 0, WIDTH, HEIGHT), COLOR_BACKGROUND)
