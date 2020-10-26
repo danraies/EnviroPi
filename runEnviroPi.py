@@ -22,18 +22,28 @@ from pms5003 import PMS5003, ReadTimeoutError as pmsReadTimeoutError
 # used for light and proximity
 from ltr559 import LTR559
 
+#time.sleep(300)
+
+#############################################################################
+# NOTE: The Adafruit credentials are held in a file called AdafruitUserInfo.
+#       The first line of the file should be the username and the second line
+#       should be the key.
+#############################################################################
+
 # Change this to false if you decide not to use AIO.
 USE_AIO = True
+AIO_CREDENTIALS_FILE = "/home/pi/PiProjects/EnviroPi/AdafruitUserInfo"
 # Initializing the Adafruit IO feeds
 aio = ""
 if USE_AIO:
     try:
-        aioCredentials = open("AdafruitUserInfo", "r")
+        aioCredentials = open(AIO_CREDENTIALS_FILE, "r")
         aioName = aioCredentials.readline().rstrip('\n')
         aioKey  = aioCredentials.readline().rstrip('\n')
         aioCredentials.close()
         aio = Client(aioName, aioKey)
     except FileNotFoundError:
+        print("file not found?")
         USE_AIO = False
 # This function will be used repeatedly to get feed keys from the client or create a new one.
 def initializeFeed(client, feedKey):
@@ -42,6 +52,7 @@ def initializeFeed(client, feedKey):
         try:
             feed = client.feeds(feedKey.lower())
             returnKey = feed.key
+            print(returnKey)
         except RequestError:
             feed = Feed(name = feedKey.lower())
             feed = client.create_feed(feed)
@@ -61,7 +72,6 @@ aioKey_polSml = initializeFeed(aio, "EnviroPi-PollutionSmall")
 aioKey_humidity = initializeFeed(aio, "EnviroPi-Humidity")
 aioKey_pressure = initializeFeed(aio, "EnviroPi-Pressure")
 aioKey_light = initializeFeed(aio, "EnviroPi-Light")
-aioKey_proximity = initializeFeed(aio, "EnviroPi-Proximity")
 # NOTE: There are some bad practices here.  Later in the script we'll call reportToAIO repeatedly so its
 #       arguments must exist even if we're not using AIO.  So if the user decides not to use AIO or if the
 #       credentials file is missing then the value of "aio" and the values of these keys are assigned to
@@ -91,8 +101,8 @@ COLOR_TEXT_SAFE      = (255, 255, 255)
 COLOR_TEXT_MILD      = (0, 255, 0)
 COLOR_TEXT_MODERATE  = (255, 255, 0)
 COLOR_TEXT_UNSAFE    = (255, 0, 0)
-COLOR_AIO_IN_USE     = (0, 0, 255)
-COLOR_AIO_FAIL       = (255, 255, 255)
+COLOR_AIO_IN_USE     = (0, 255, 0)
+COLOR_AIO_FAIL       = (255, 0, 0)
 
 # A global variable which represents a missing value.
 MISSING_VALUE = -1
@@ -206,6 +216,9 @@ colAIO = COLOR_BACKGROUND
 try:
     while True:
         uptime = datetime.now() - timeStart
+
+        if not USE_AIO:
+            print(datetime.now())
 
         ###########################
         # First Screen: Air Quality
