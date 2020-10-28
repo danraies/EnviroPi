@@ -217,9 +217,6 @@ try:
     while True:
         uptime = datetime.now() - timeStart
 
-        if not USE_AIO:
-            print(datetime.now())
-
         ###########################
         # First Screen: Air Quality
         ###########################
@@ -390,7 +387,6 @@ try:
                 reportToAIO(aioKey_humidity, humidity)
                 reportToAIO(aioKey_pressure, pressure)
                 reportToAIO(aioKey_light, light)
-                # reportToAIO(aioKey_proximity, proximity)
                 # Resetting the timestamp on the last AIO report.
                 lastAIOReport = datetime.now()
                 # Change the color of the indicator to show that the AIO report succeeded.
